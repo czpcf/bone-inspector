@@ -109,6 +109,8 @@ def load(filepath: str, extract_option: ExtractOption):
         for obj in data_to.objects:
             if obj is not None:
                 bpy.context.collection.objects.link(obj)
+    elif ext == "bvh":
+        bpy.ops.import_anim.bvh(filepath=filepath)
     else:
         raise error_unsupported_type(ext)
 

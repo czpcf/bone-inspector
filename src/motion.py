@@ -58,6 +58,7 @@ def get_matrix(
     matrix_local: ndarray,
     matrix_basis: ndarray,
     parents: List[Union[None, int]],
+    roll: Optional[ndarray]=None,
 ) -> ndarray:
     """
     Get matrix using forward kinetics.
@@ -80,6 +81,8 @@ def get_matrix(
                 (np.linalg.inv(matrix_local_parent) @ matrix_local[i]) @
                 matrix_basis[i]
             )
+    if roll is not None:
+        matrix[:, :3, :3] = matrix[:, :3, :3] @ roll
     return matrix_world @ matrix
 
 def get_matrix_basis(

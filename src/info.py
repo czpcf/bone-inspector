@@ -3,11 +3,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from numpy import ndarray
 from scipy.spatial import KDTree
-from typing import Any, Optional, Union, Tuple, List, Literal
+from typing import Any, Optional, Union, Tuple, List, Literal, Dict
 
 import bpy
 import fast_simplification
 import gc
+import logging
+import math
 import numpy as np
 import open3d as o3d
 import os
@@ -15,7 +17,7 @@ import trimesh
 
 from .export import Exporter
 from .motion import linear_blend_skinning, get_matrix, get_matrix_basis
-from .utils import axis_angle_to_matrix, guess_orientation
+from .utils import axis_angle_to_matrix, guess_orientation, orientation_str_to_matrix
 
 @dataclass
 class VoxelInfo():
@@ -117,6 +119,52 @@ class MeshInfo():
     def F(self):
         return None if self.faces is None else self.faces.shape[0]
     
+    def data(self, float_dtype=np.float32, int_dtype=np.int32):
+        data = {}
+        if self.name is not None:
+            data["name"] = self.name
+        if self.vertices is not None:
+            data["vertices"] = np.array(self.vertices, dtype=float_dtype)
+        if self.vertex_normals is not None:
+            data["vertex_normals"] = np.array(self.vertex_normals, dtype=float_dtype)
+        if self.face_normals is not None:
+            data["face_normals"] = np.array(self.face_normals, dtype=float_dtype)
+        if self.faces is not None:
+            data["faces"] = np.array(self.faces, dtype=int_dtype)
+        if self.skin is not None:
+            data["skin"] = np.array(self.skin, dtype=float_dtype)
+        return data
+    
+    @classmethod
+    def from_data(cls, data: Dict, float_dtype=np.float32, int_dtype=np.int32) -> 'MeshInfo':
+        name = data.get("name", None)
+        if name is not None and isinstance(name, ndarray):
+            name = name.item()
+        name = str(name)
+        vertices = data.get("vertices", None)
+        if vertices is not None:
+            vertices = np.array(vertices, dtype=float_dtype)
+        vertex_normals = data.get("vertex_normals", None)
+        if vertex_normals is not None:
+            vertex_normals = np.array(vertex_normals, dtype=float_dtype)
+        face_normals = data.get("face_normals", None)
+        if face_normals is not None:
+            face_normals = np.array(face_normals, dtype=float_dtype)
+        faces = data.get("faces", None)
+        if faces is not None:
+            faces = np.array(faces, dtype=int_dtype)
+        skin = data.get("skin", None)
+        if skin is not None:
+            skin = np.array(skin, dtype=float_dtype)
+        return cls(
+            name=name,
+            vertices=vertices,
+            vertex_normals=vertex_normals,
+            face_normals=face_normals,
+            faces=faces,
+            skin=skin,
+        )
+        
     def transform(self, trans: ndarray):
         """
         Affine transformation via 4x4 matrix.
@@ -296,6 +344,57 @@ class ArmatureInfo():
             return None
         return self.matrix_basis.shape[0]
     
+    def data(self, float_dtype=np.float32, int_dtype=np.int32) -> Dict:
+        data = {
+            "matrix_world": np.array(self.matrix_world, dtype=float_dtype),
+            "matrix_local": np.array(self.matrix_local, dtype=float_dtype),
+            "parents": np.array([-1 if p is None else p for p in self.parents], dtype=int_dtype),
+        }
+        
+        if self.lengths is not None:
+            data["lengths"] = np.array(self.lengths, dtype=np.float32)
+        if self.bone_names is not None:
+            data["bone_names"] = self.bone_names
+        if self.matrix_basis is not None:
+            data["matrix_basis"] = np.array(self.matrix_basis, dtype=np.float32)
+        if self.name is not None:
+            data["name"] = self.name
+        return data
+    
+    @classmethod
+    def from_data(cls, data: dict, float_dtype=np.float32, int_dtype=np.int32) -> 'ArmatureInfo':
+        """
+        从 numpy-friendly dict 恢复 ArmatureInfo
+        """
+        matrix_world = np.array(data["matrix_world"], dtype=float_dtype)
+        matrix_local = np.array(data["matrix_local"], dtype=float_dtype)
+
+        parents_arr = np.array(data["parents"], dtype=int_dtype)
+        parents = [None if p == -1 else int(p) for p in parents_arr]
+        
+        lengths = None
+        if "lengths" in data:
+            lengths = np.array(data["lengths"], dtype=float_dtype)
+        bone_names = None
+        if "bone_names" in data:
+            bone_names = list(data["bone_names"])
+        matrix_basis = None
+        if "matrix_basis" in data:
+            matrix_basis = np.array(data["matrix_basis"], dtype=float_dtype)
+        name = data.get('name', None)
+        if name is not None and isinstance(name, np.ndarray):
+            name = name.item()
+        name = str(name)
+        return cls(
+            matrix_world=matrix_world,
+            matrix_local=matrix_local,
+            parents=parents,
+            lengths=lengths,
+            bone_names=bone_names,
+            matrix_basis=matrix_basis,
+            name=name,
+        )
+    
     def permute(self, perm, new_parents):
         self.matrix_local = self.matrix_local[perm]
         self.new_parents = new_parents
@@ -312,7 +411,7 @@ class ArmatureInfo():
         Affine transformation via 4x4 matrix.
         """
         assert trans.shape == (4, 4)
-        self.matrix_local = trans @ self.matrix_local
+        self.matrix_world = trans @ self.matrix_world
     
     def random_pose(self, degree: float=15.0) -> ndarray:
         matrix_basis = axis_angle_to_matrix(
@@ -339,40 +438,53 @@ class ArmatureInfo():
     
     def retarget(
         self,
-        target: 'ArmatureInfo',
+        source: 'ArmatureInfo',
         exact: bool=True,
         do_not_align: bool=False,
         ignore_missing_bone: bool=False,
         start: Optional[int]=None,
         end: Optional[int]=None,
+        mapping: Optional[Dict[str, str]]=None,
     ) -> 'ArmatureInfo':
         """
-        Transfer animation from target.
+        Transfer animation from source.
         """
-        if target.frames is None:
-            raise ValueError("There is no animation in target.")
+        if source.frames is None:
+            raise ValueError("There is no animation in source.")
         if start is None:
             start = 0
         if end is None:
-            end = target.frames
-        assert 0 <= start < end <= target.frames
-        source_name_to_id = {name: i for i, name in enumerate(self.bone_names)}
-        target_name_to_id = {name: i for i, name in enumerate(target.bone_names)}
+            end = source.frames
+        assert 0 <= start < end <= source.frames
+        tgt_bone_names = self.bone_names
+        if tgt_bone_names is None:
+            logging.warning("`bone_names` is None for target")
+            tgt_bone_names = [f"bone_{i}" for i in range(self.J)]
+        src_bone_names = source.bone_names
+        if src_bone_names is None:
+            logging.warning("`bone_names` is None for source")
+            src_bone_names = [f"bone_{i}" for i in range(source.J)]
+        if mapping is None:
+            mapping = {}
+        else:
+            src_bone_names = [n if n not in mapping else mapping[n] for n in src_bone_names]
+        src_name_to_id = {name: i for i, name in enumerate(src_bone_names)}
+        tgt_name_to_id = {name: i for i, name in enumerate(tgt_bone_names)}
         if exact:
-            if set(source_name_to_id.keys()) != set(target_name_to_id.keys()):
+            if set(src_name_to_id.keys()) != set(tgt_name_to_id.keys()):
                 raise ValueError("Mismatch between bone names.")
         elif not ignore_missing_bone:
-            for k in source_name_to_id.keys():
-                if k not in target_name_to_id:
-                    raise ValueError(f"Missing bone in target: {k}")
-        target_align = deepcopy(target)
-        target_align.change_matrix_local(matrix_world=self.matrix_world)
+            for k in tgt_name_to_id.keys():
+                if k not in src_name_to_id:
+                    raise ValueError(f"Missing bone in source: {k}")
+        src_align = deepcopy(source)
+        src_align.change_matrix_local(matrix_world=self.matrix_world)
         matrix_basis = np.zeros((end-start, self.J, 4, 4), dtype=np.float32)
         matrix_basis[...] = np.eye(4)
         matrix_local = self.matrix_local.copy()
-        for (k, v) in source_name_to_id.items():
-            if k in target_name_to_id:
-                matrix_local[v] = target_align.matrix_local[target_name_to_id[k]]
+        for (k, v) in tgt_name_to_id.items():
+            if k in src_name_to_id:
+                matrix_local[v] = src_align.matrix_local[src_name_to_id[k]]
         if do_not_align:
             matrix_align = np.zeros((self.J, 4, 4), dtype=np.float32)
             matrix_align[...] = np.eye(4)
@@ -383,14 +495,14 @@ class ArmatureInfo():
                 matrix_local=self.matrix_local,
                 parents=self.parents,
             )
-        for (k, v) in source_name_to_id.items():
-            if k not in target_name_to_id:
+        for (k, v) in tgt_name_to_id.items():
+            if k not in src_name_to_id:
                 matrix_align[v] = np.eye(4)
-        for (k, v) in source_name_to_id.items():
-            if k not in target_name_to_id:
+        for (k, v) in tgt_name_to_id.items():
+            if k not in src_name_to_id:
                 continue
             for i in range(start, end):
-                matrix_basis[i-start, v] = matrix_align[v] @ target_align.matrix_basis[i, target_name_to_id[k]]
+                matrix_basis[i-start, v] = matrix_align[v] @ src_align.matrix_basis[i, src_name_to_id[k]]
         return ArmatureInfo(
             matrix_world=self.matrix_world.copy(),
             matrix_local=self.matrix_local.copy(),
@@ -443,6 +555,7 @@ class ArmatureInfo():
         matrix_world: Optional[ndarray]=None,
         src_orientation: Optional[str]=None,
         tgt_orientation: Optional[str]=None,
+        roll: Optional[Dict[str, float]]=None,
     ):
         """
         Change the matrix_local(another armature's matrix_local) so that two armatures can align.
@@ -453,7 +566,7 @@ class ArmatureInfo():
         """
         src_axis = np.eye(4)
         tgt_axis = np.eye(4)
-        # blender do not have any function to know the actual orientation
+        # blender does not have any function to know the actual orientation
         # have to guess or expect it from user
         if src_orientation is None:
             src_axis[:3, :3] = guess_orientation(self.matrix_local[0])
@@ -484,6 +597,19 @@ class ArmatureInfo():
         # why need this matrix? because `matrix` is just a derived term from `matrix_local` and `matrix_basis`, need this to correctly compute `matrix_basis`
         view_in_another_space = matrix_world @ tgt_axis @ np.linalg.inv(self.matrix_world @ src_axis)
         view_in_another_space = view_in_another_space[:3, :3]
+        roll_matrix = np.zeros((self.J, 3, 3))
+        roll_matrix[...] = np.eye(3)
+        name_to_id = {k: i for (i, k) in enumerate(self.bone_names)}
+        print(matrix_world)
+        if roll is not None:
+            for k, v in roll.items():
+                id = name_to_id[k]
+                roll_matrix[id, :3, :3] = 0.
+                roll_matrix[id, 1, 1] = 1.
+                roll_matrix[id, 0, 0] = math.cos(v)
+                roll_matrix[id, 2, 0] = -math.sin(v)
+                roll_matrix[id, 0, 2] = math.sin(v)
+                roll_matrix[id, 2, 2] = math.cos(v)
         if matrix_local is None and _f:
             # convert into world space
             # note the coordinates are now in world space, but rotation is not
@@ -501,6 +627,7 @@ class ArmatureInfo():
                     matrix_local=self.matrix_local,
                     matrix_basis=self.matrix_basis[frame],
                     parents=self.parents,
+                    roll=roll_matrix,
                 )
                 # only apply rotation transition
                 matrix[:, :3, :3] = view_in_another_space @ matrix[:, :3, :3]

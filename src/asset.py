@@ -1,7 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from numpy import ndarray
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 
 import numpy as np
 
@@ -16,6 +16,35 @@ class Asset():
     error: Optional[ExtractError]=None
     meshes: Optional[List[MeshInfo]]=None
     armature: Optional[ArmatureInfo]=None
+    
+    def data(self, float_dtype=np.float32, int_dtype=np.int32) -> Dict:
+        d = {
+            'meshes': None,
+            'armature': None,
+        }
+        if self.meshes is not None:
+            d['meshes'] = []
+            for mesh in self.meshes:
+                d['meshes'].append(mesh.data())
+        if self.armature is not None:
+            d['armature'] = self.armature.data()
+        return d
+    
+    @classmethod
+    def from_data(cls, data: Dict, float_dtype=np.float32, int_dtype=np.int32) -> 'Asset':
+        meshes = None
+        if data.get('meshes') is not None:
+            meshes = [
+                MeshInfo.from_data(m, float_dtype, int_dtype)
+                for m in data['meshes']
+            ]
+        armature = None
+        if data.get('armature') is not None:
+            armature = ArmatureInfo.from_data(data['armature'])
+        return Asset(
+            meshes=meshes,
+            armature=armature,
+        )
     
     def add_warning(self, warning: Union[ExtractWarning, List[ExtractWarning], 'Asset']):
         if self.warnings is None:
@@ -33,10 +62,50 @@ class Asset():
         return mesh.voxelization(voxel_size=voxel_size)
     
     def transform(self, trans: ndarray):
-        if self.mesh is not None:
-            self.mesh.transform(trans=trans)
+        if self.meshes is not None:
+            for mesh in self.meshes:
+                mesh.transform(trans=trans)
         if self.armature is not None:
             self.armature.transform(trans=trans)
+    
+    def keep(self, names: Union[List[str], Dict]):
+        if self.armature is None:
+            return
+        assert self.armature.bone_names[0] in names, f"root {self.armature.bone_names[0]} must be kept"
+        name_to_id = {k: i for (i, k) in enumerate(self.armature.bone_names)}
+        ids = [i for (i, k) in enumerate(self.armature.bone_names) if k in names]
+        parents = []
+        n_id = {}
+        def find_parent(name):
+            while name not in n_id:
+                pid = self.armature.parents[name_to_id[name]]
+                if pid is None:
+                    break
+                name = self.armature.bone_names[pid]
+            if name not in n_id:
+                return None
+            return n_id[name]
+        for (i, n) in enumerate(names):
+            if i == 0:
+                parents.append(None)
+            else:
+                parents.append(find_parent(n))
+            n_id[n] = i
+        print(parents)
+        print(self.armature.parents)
+        self.armature.matrix_local = self.armature.matrix_local[ids]
+        self.armature.matrix_basis = self.armature.matrix_basis[:, ids]
+        self.armature.parents = parents
+        self.armature.bone_names = [self.armature.bone_names[x] for x in ids]
+        for i in range(self.armature.J):
+            if i == 0:
+                continue
+            print(self.armature.bone_names[i], self.armature.bone_names[parents[i]])
+        self.armature.lenghts = self.armature.lengths[ids]
+        if self.meshes is not None:
+            for mesh in self.meshes:
+                if mesh.skin is not None:
+                    mesh.skin = mesh.skin[:, ids]
     
     def set_order_by_names(self, new_names: List[str]):
         assert len(new_names) == len(self.armature.bone_names)
@@ -187,7 +256,7 @@ class Asset():
             self.armature.export_animation(path=path, start=start, end=end)
             return
         if self.meshes is None:
-            raise ValueError("Armature_only is False, but meshes are missing.")
+            raise ValueError("`armature_only` is False, but meshes are missing.")
         
         start = 0 if start is None else start
         end = self.armature.frames if end is None else end

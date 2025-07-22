@@ -225,15 +225,14 @@ class Exporter():
         
         if joints is not None and parents is not None and bone_names is not None:
             J = joints.shape[0]
-            # make tails
-            if tails is None:
-                tails = joints.copy()
-                tails[:, 2] += extrude_size
             connects = [False for _ in range(J)]
             children = defaultdict(list)
             for i in range(1, J):
                 children[parents[i]].append(i)
-            if tails is not None:
+            # make tails
+            if tails is None:
+                tails = joints.copy()
+                tails[:, 2] += extrude_size
                 if use_extrude_bone:
                     for i in range(J):
                         if len(children[i]) != 1 and extrude_from_parent and i != 0:
@@ -252,7 +251,6 @@ class Exporter():
                             tails[i] = joints[child]
                         if parents[i] is not None and len(children[parents[i]]) == 1:
                             connects[i] = True
-            
             if add_root:
                 bone_root = edit_bones.get('Bone')
                 bone_root.name = 'Root'
@@ -349,10 +347,10 @@ class Exporter():
                     # matrix_local of pose bone
                     bpy.context.active_object.data.edit_bones[id].matrix = to_matrix(matrix_local[id])
                 bpy.ops.object.mode_set(mode='OBJECT')
-                for frame in range(frames):
-                    bpy.context.scene.frame_set(frame + 1)
-                    for (id, name) in enumerate(bone_names):
-                        pbone = armature.pose.bones.get(name)
+                for (id, name) in enumerate(bone_names):
+                    pbone = armature.pose.bones.get(name)
+                    for frame in range(frames):
+                        bpy.context.scene.frame_set(frame + 1)
                         q = to_matrix(matrix_basis[frame, id])
                         if pbone.rotation_mode == "QUATERNION":
                             pbone.rotation_quaternion = q.to_quaternion()

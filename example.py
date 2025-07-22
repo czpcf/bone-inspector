@@ -27,7 +27,7 @@ tgt.export_animation('test.fbx')
 tgt.armature.change_matrix_local()
 tgt.export_animation('test.glb')
 
-# apply a pose at frame 10
-tgt.armature.apply_pose(tgt.armature.get_frame(10), inplace=False)
+# apply a pose at frame 10, this operation is irreversible
+tgt.armature.apply_pose(tgt.armature.get_frame(10), inplace=True)
 # export
 tgt.armature.export_skeleton('skeleton.obj')

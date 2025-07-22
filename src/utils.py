@@ -46,4 +46,4 @@ def orientation_str_to_matrix(orientation: str) -> ndarray:
         (1 if p[0] == '+' else -1) * axis_map[p[1]] 
         for p in parts
     ])
-    return 
+    return matrix
