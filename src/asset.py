@@ -91,8 +91,6 @@ class Asset():
             else:
                 parents.append(find_parent(n))
             n_id[n] = i
-        print(parents)
-        print(self.armature.parents)
         self.armature.matrix_local = self.armature.matrix_local[ids]
         self.armature.matrix_basis = self.armature.matrix_basis[:, ids]
         self.armature.parents = parents
@@ -100,8 +98,7 @@ class Asset():
         for i in range(self.armature.J):
             if i == 0:
                 continue
-            print(self.armature.bone_names[i], self.armature.bone_names[parents[i]])
-        self.armature.lenghts = self.armature.lengths[ids]
+        self.armature.lengths = self.armature.lengths[ids]
         if self.meshes is not None:
             for mesh in self.meshes:
                 if mesh.skin is not None:

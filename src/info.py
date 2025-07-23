@@ -344,6 +344,16 @@ class ArmatureInfo():
             return None
         return self.matrix_basis.shape[0]
     
+    def get_tails_offset(self, matrix: ndarray):
+        if self.lengths is None:
+            return None
+        x = np.array([0.0, 1.0, 0.0])
+        x = self.lengths * x[:, np.newaxis]
+        y = np.zeros((self.J, 3))
+        for i in range(self.J):
+            y[i] = matrix[i, :3, :3] @ x[:, i]
+        return y
+    
     def data(self, float_dtype=np.float32, int_dtype=np.int32) -> Dict:
         data = {
             "matrix_world": np.array(self.matrix_world, dtype=float_dtype),
@@ -423,6 +433,22 @@ class ArmatureInfo():
             matrix_basis=matrix_basis,
             parents=self.parents,
         )
+    
+    def get_pose(self, matrix_basis: Optional[ndarray]=None, frame: Optional[int]=None) -> ndarray:
+        assert not(matrix_basis is None and frame is None), "`matrix_basis` or `frame` must be assigned"
+        if matrix_basis is not None:
+            pass
+        else:
+            assert self.frames is not None, "do not have any frames"
+            frame = min(frame, self.frames-1)
+            matrix_basis = self.matrix_basis[frame]
+        matrix = get_matrix(
+            matrix_world=self.matrix_world,
+            matrix_local=self.matrix_local,
+            matrix_basis=matrix_basis,
+            parents=self.parents
+        )
+        return matrix
     
     def apply_pose(self, matrix_basis: ndarray, inplace: bool=True) -> ndarray:
         matrix = get_matrix(
@@ -512,11 +538,17 @@ class ArmatureInfo():
             bone_names=None if self.bone_names is None else self.bone_names.copy(),
         )
     
-    def export_skeleton(self, path: str, simple: bool=True, ignore_tail: bool=True):
+    def export_skeleton(self, path: str, simple: bool=True, ignore_tail: bool=True, frame: Optional[int]=None):
+        _j = self.joints
+        if frame is not None:
+            assert self.frames is not None, "do not have any frames"
+            frame = min(frame, self.frames-1)
+            matrix = self.get_pose(frame=frame)
+            _j = matrix[:, :3, 3]
         if ignore_tail:
-            Exporter.export_skeleton(joints=self.joints, parents=self.parents, path=path, simple=simple)
+            Exporter.export_skeleton(joints=_j, parents=self.parents, path=path, simple=simple)
         else:
-            Exporter.export_skeleton(joints=self.joints, parents=self.parents, path=path, tails=self.tails, simple=simple)
+            Exporter.export_skeleton(joints=_j, parents=self.parents, path=path, tails=_j+self.get_tails_offset(matrix=matrix), simple=simple)
     
     def export_animation(
         self,
@@ -600,7 +632,6 @@ class ArmatureInfo():
         roll_matrix = np.zeros((self.J, 3, 3))
         roll_matrix[...] = np.eye(3)
         name_to_id = {k: i for (i, k) in enumerate(self.bone_names)}
-        print(matrix_world)
         if roll is not None:
             for k, v in roll.items():
                 id = name_to_id[k]
