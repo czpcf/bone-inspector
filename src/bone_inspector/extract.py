@@ -434,6 +434,6 @@ def extract_asset(filepath: str, extract_option: ExtractOption) -> Asset:
         result.armature = armature_info
     except ExtractError as e:
         result.error = e
-    if extract_option.merge_meshes:
+    if extract_option.extract_mesh and extract_option.merge_meshes:
         result.merge_meshes()
     return result

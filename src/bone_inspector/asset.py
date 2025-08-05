@@ -72,8 +72,9 @@ class Asset():
         if self.armature is None:
             return
         assert self.armature.bone_names[0] in names, f"root {self.armature.bone_names[0]} must be kept"
+        arranged_names = [k for k in self.armature.bone_names if k in names]
         name_to_id = {k: i for (i, k) in enumerate(self.armature.bone_names)}
-        ids = [i for (i, k) in enumerate(self.armature.bone_names) if k in names]
+        ids = [i for (i, k) in enumerate(self.armature.bone_names) if k in arranged_names]
         parents = []
         n_id = {}
         def find_parent(name):
@@ -85,7 +86,7 @@ class Asset():
             if name not in n_id:
                 return None
             return n_id[name]
-        for (i, n) in enumerate(names):
+        for (i, n) in enumerate(arranged_names):
             if i == 0:
                 parents.append(None)
             else:
@@ -235,6 +236,7 @@ class Asset():
             tails=self.armature.tails,
             bone_names=self.armature.bone_names,
             parents=self.armature.parents,
+            matrix_world=self.armature.matrix_world,
             **kwargs,
         )
     

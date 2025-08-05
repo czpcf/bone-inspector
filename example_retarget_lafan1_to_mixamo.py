@@ -1,9 +1,9 @@
 import math
 import numpy as np
 
-from src.asset import Asset
-from src.extract import extract_asset, ExtractOption
-from src.export import Exporter
+from src.bone_inspector.asset import Asset
+from src.bone_inspector.extract import extract_asset, ExtractOption
+from src.bone_inspector.export import Exporter
 
 mapping = {
     "Hips": "mixamorig:Hips",

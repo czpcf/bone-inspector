@@ -11,7 +11,6 @@ import gc
 import logging
 import math
 import numpy as np
-import open3d as o3d
 import os
 import trimesh
 
@@ -178,6 +177,10 @@ class MeshInfo():
         self.face_normals = np.array(mesh.face_normals, dtype=np.float32)
     
     def voxelization(self, voxel_size: float=0.1) -> VoxelInfo:
+        try:
+            import open3d as o3d
+        except Exception as e:
+            raise RuntimeError(f"cannot import open3d: {str(e)}")
         mesh_o3d = o3d.geometry.TriangleMesh()
         mesh_o3d.vertices = o3d.utility.Vector3dVector(self.vertices.copy())
         mesh_o3d.triangles = o3d.utility.Vector3iVector(self.faces)
@@ -633,14 +636,22 @@ class ArmatureInfo():
         roll_matrix[...] = np.eye(3)
         name_to_id = {k: i for (i, k) in enumerate(self.bone_names)}
         if roll is not None:
-            for k, v in roll.items():
-                id = name_to_id[k]
-                roll_matrix[id, :3, :3] = 0.
-                roll_matrix[id, 1, 1] = 1.
-                roll_matrix[id, 0, 0] = math.cos(v)
-                roll_matrix[id, 2, 0] = -math.sin(v)
-                roll_matrix[id, 0, 2] = math.sin(v)
-                roll_matrix[id, 2, 2] = math.cos(v)
+            if isinstance(roll, float):
+                roll_matrix[:, :3, :3] = 0.
+                roll_matrix[:, 1, 1] = 1.
+                roll_matrix[:, 0, 0] = math.cos(roll)
+                roll_matrix[:, 2, 0] = -math.sin(roll)
+                roll_matrix[:, 0, 2] = math.sin(roll)
+                roll_matrix[:, 2, 2] = math.cos(roll)
+            else:
+                for k, v in roll.items():
+                    id = name_to_id[k]
+                    roll_matrix[id, :3, :3] = 0.
+                    roll_matrix[id, 1, 1] = 1.
+                    roll_matrix[id, 0, 0] = math.cos(v)
+                    roll_matrix[id, 2, 0] = -math.sin(v)
+                    roll_matrix[id, 0, 2] = math.sin(v)
+                    roll_matrix[id, 2, 2] = math.cos(v)
         if matrix_local is None and _f:
             # convert into world space
             # note the coordinates are now in world space, but rotation is not
