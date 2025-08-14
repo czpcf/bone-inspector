@@ -93,7 +93,8 @@ class Asset():
                 parents.append(find_parent(n))
             n_id[n] = i
         self.armature.matrix_local = self.armature.matrix_local[ids]
-        self.armature.matrix_basis = self.armature.matrix_basis[:, ids]
+        if self.armature.matrix_basis is not None:
+            self.armature.matrix_basis = self.armature.matrix_basis[:, ids]
         self.armature.parents = parents
         self.armature.bone_names = [self.armature.bone_names[x] for x in ids]
         for i in range(self.armature.J):
